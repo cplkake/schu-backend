@@ -1,9 +1,6 @@
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
-const Brand = require('./brand');
-const Type = require('./type');
-
 const ShoeSchema = new Schema({
     model: {
       type: String, 

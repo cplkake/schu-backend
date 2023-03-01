@@ -1,15 +1,10 @@
-/*
-  to do:
-    - pagination: https://bezkoder.com/node-js-mongodb-pagination/
-*/
 const async = require('async');
+const createError = require('http-errors');
 
 const Shoe = require('../models/shoe');
 const ShoeSizeInstance = require('../models/shoeSizeInstance');
 
-// return the data found when querying a single shoe
-// data to be used on the product page
-// need to incorporate shoes sizes
+// return an array containing the specified shoe object  and the stock of each size available for that shoe
 exports.findOneShoe = (req, res, next) => {
   async.parallel({
     shoe_model: function(callback) {
@@ -27,87 +22,75 @@ exports.findOneShoe = (req, res, next) => {
   }, (err, data) => {
     if (err) return next(err);
     res.json(data);
-  })
-  
+  })  
 }
 
-// return the profile pic URI, model, brand, price, salesPrice(if not null) of shoes that pass through the filter
-// to be used to display on product cards 
-exports.findAllShoes = (req, res, next) => {
-  let query;
+// queries (if received) are added to the mongoFilter object which is then sent as the filter parameter by Mongoose
+// returns an array of matching shoe objects
+exports.findShoes = (req, res, next) => {
+  let mongoFilter = {};
+  let limit;
 
   if (req.query.shoe_types) {
-    // since shoe_types in the shoe model is an array of subdocuments, look for shoes that have a matching shoe_types id from the query
-    const { shoe_types: shoe_types, ...reqWithoutTypes } = req.query;
-    query = Object.assign({ "shoe_types": { "$in": shoe_types } }, reqWithoutTypes);
-  } else {
-    query = req.query;
+    // req.query.shoe_types can be either be a string or an array 
+    if (Array.isArray(req.query.shoe_types)) {
+      if (req.query.shoe_types.every(typeParameter => typeParameter.match(/^[0-9a-fA-F]{24}$/))) {
+        const { shoe_types: shoe_types } = req.query;
+        mongoFilter = { "shoe_types": { "$in": shoe_types } };
+      }
+      else return next(createError(400, 'Each brand parameter must be a length 24 hex string'));
+    }
+    else {
+      if (req.query.shoe_types.match(/^[0-9a-fA-F]{24}$/)) {
+        const { shoe_types: shoe_types } = req.query;
+        mongoFilter = { "shoe_types": { "$in": shoe_types } };
+      } 
+      else return next(createError(400, 'shoe_types parameter must be a length 24 hex string'));
+    }
+  }
+
+  if (req.query.brand) {
+    // req.query.brand can be either be a string or an array 
+    if (Array.isArray(req.query.brand)) {
+      if (req.query.brand.every(brandParameter => brandParameter.match(/^[0-9a-fA-F]{24}$/))) {
+        mongoFilter = Object.assign(mongoFilter, { brand: req.query.brand });
+      }
+      else return next(createError(400, 'Each brand parameter must be a length 24 hex string'));
+    }
+    else {
+      if (req.query.brand.match(/^[0-9a-fA-F]{24}$/)) {
+        mongoFilter = Object.assign(mongoFilter, { brand: req.query.brand });
+      }
+      else return next(createError(400, 'brand parameter must be a length 24 hex string'));  
+    }
+  }
+
+  if (req.query.new_arrivals) {
+    mongoFilter = Object.assign(mongoFilter, { isNewArrival: true });
+  }
+
+  // if more than one parameter for limit is provided, use the last one
+  if (req.query.limit) {
+    if (Array.isArray(req.query.limit)) limit = Math.floor(req.query.limit[req.query.limit.length - 1]);
+    else limit = Math.floor(req.query.limit);
+    if (!Number.isInteger(limit) || limit <= 0 ) return next(createError(400, 'limit parameter must be an integer greater than 0'))
   }
   
   Shoe 
-    .find(query, '-dateAdded -__v')
+    .find(mongoFilter, '-dateAdded -__v')
     .populate('brand', 'name')
     .populate('shoe_types', 'name')
     .exec((err, data) => {
       if (err) return next(err);
-      res.json(data);
+      if (limit) {
+        if (req.query.new_arrivals) {
+          // new arrivals are sorted by dateAdded
+          const latestSortedArrivals = data.sort((prevShoe, nextShoe) => nextShoe['dateAdded'] - prevShoe['dateAdded']).slice(0, limit);
+          res.json(latestSortedArrivals)
+        } 
+        else res.json(data.slice(0, limit))
+      } 
+      else res.json(data);
     });
 };
 
-exports.findShoesByBrand = (req, res, next) => {
-  let query;
-
-  if (req.query.shoe_types) {
-    // since shoe_types in the shoe model is an array of subdocuments, look for shoes that have a matching shoe_types id from the query
-    const { shoe_types: shoe_types, ...reqWithoutTypes } = req.query;
-    query = Object.assign({ "shoe_types": { "$in": shoe_types } }, reqWithoutTypes, { brand: req.params.brand });
-  } else {
-    query = Object.assign(req.query, { brand: req.params.brand });
-  }
-
-  Shoe
-    .find(query,'-dateAdded -__v')
-    .populate('brand', 'name')
-    .populate('shoe_types', 'name')
-    .exec((err, data) => {
-      if (err) return next(err);
-      res.json(data);
-    });
-};
-
-// returns all shoes that have the isNewArrival property set to true
-exports.findAllNewArrivals = (req, res, next) => {
-  let query;
-
-  if (req.query.shoe_types) {
-    // since shoe_types in the shoe model is an array of subdocuments, look for shoes that have a matching shoe_types id from the query
-    const { shoe_types: shoe_types, ...reqWithoutTypes } = req.query;
-    query = Object.assign({ "shoe_types": { "$in": shoe_types } }, reqWithoutTypes, { isNewArrival: true });
-  } else {
-    query = Object.assign(req.query, { isNewArrival: true });
-  }
-
-  Shoe
-    .find(query, '-dateAdded -__v')
-    .populate('brand', 'name')
-    .populate('shoe_types', 'name')
-    .exec((err, data) => {
-      if (err) return next(err);
-      res.json(data);
-    });
-};
-
-// change 5 to 10, make it so that even if there isnt 10 new arrivals, it doesnt break
-// returns 5 most recent shoes that have the isNewArrival property set to true
-// data returned to be displayed on the front page under the New Arrivals section
-exports.findLatestNewArrivals = (req, res, next) => {
-  Shoe
-    .find({ isNewArrival: true }, '-dateAdded -__v')
-    .populate('brand', 'name')
-    .populate('shoe_types', 'name')
-    .exec((err, data) => {
-      if (err) return next(err);
-      const latestFive = data.sort((prevShoe, nextShoe) => nextShoe['dateAdded'] - prevShoe['dateAdded']).slice(0, 5);
-      res.json(latestFive);
-    });
-};
